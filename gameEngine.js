@@ -51,9 +51,9 @@ class TeenPattiTable {
     this.log = [];
   }
 
-  addPlayer(id, name, chips = 500) {
+  addPlayer(id, name, chips = 500, isBot = false) {
     if (this.players.find((p) => p.id === id)) return;
-    this.players.push({ id, name, chips, hand: [], status: STATUS.BLIND, connected: true });
+    this.players.push({ id, name, chips, hand: [], status: STATUS.BLIND, connected: true, isBot });
   }
 
   removePlayer(id) {
@@ -120,10 +120,10 @@ class TeenPattiTable {
 
   _advanceTurn() {
     if (this.activePlayers().length <= 1) {
-      this._endRoundBySoleSurvivor();
-      return;
+      return this._endRoundBySoleSurvivor();
     }
     this.turnIndex = this._nextActiveIndex(this.turnIndex);
+    return null;
   }
 
   _requireTurn(playerId) {
@@ -145,8 +145,8 @@ class TeenPattiTable {
     if (p.status !== STATUS.BLIND) throw new Error('Already seen — use playSeen');
     this._deduct(p, this.currentStake);
     this._log(`${p.name} played blind for ${this.currentStake}`);
-    this._advanceTurn();
-    return this.getPublicState();
+    const settled = this._advanceTurn();
+    return settled || this.getPublicState();
   }
 
   // Only the seat right after the last raiser may do this, while still blind
@@ -165,8 +165,8 @@ class TeenPattiTable {
     this.lastRaiserIndex = idx;
     this.ultraBlindEligibleIndex = this._nextActiveIndex(idx);
     this._log(`${p.name} played ULTA BLIND for ${raiseAmount}. Stake is now ${this.currentStake}.`);
-    this._advanceTurn();
-    return this.getPublicState();
+    const settled = this._advanceTurn();
+    return settled || this.getPublicState();
   }
 
   // Player looks at their cards. If it's their turn, this doubles as their chaal for this turn.
@@ -195,8 +195,8 @@ class TeenPattiTable {
 
     this._deduct(p, cost);
     this._log(`${p.name} played seen for ${cost}`);
-    this._advanceTurn();
-    return this.getPublicState();
+    const settled = this._advanceTurn();
+    return settled || this.getPublicState();
   }
 
   // Seen player raises the stake
@@ -210,16 +210,16 @@ class TeenPattiTable {
     this.lastRaiserIndex = this.playerIndex(playerId);
     this.ultraBlindActive = false;
     this._log(`${p.name} raised stake to ${newStake}`);
-    this._advanceTurn();
-    return this.getPublicState();
+    const settled = this._advanceTurn();
+    return settled || this.getPublicState();
   }
 
   pack(playerId) {
     const p = this._requireTurn(playerId);
     p.status = STATUS.PACKED;
     this._log(`${p.name} packed`);
-    this._advanceTurn();
-    return this.getPublicState();
+    const settled = this._advanceTurn();
+    return settled || this.getPublicState();
   }
 
   // Requester must be seen; target must be the seen player immediately before requester in turn order
@@ -239,16 +239,16 @@ class TeenPattiTable {
 
     if (response === 'reject') {
       this._log(`${target.name} rejected side show from ${req.name}`);
-      this._advanceTurn();
-      return this.getPublicState();
+      const settled1 = this._advanceTurn();
+      return settled1 || this.getPublicState();
     }
 
     const result = compareHands(req.hand, target.hand);
     const loserIdx = result >= 0 ? prevIdx : reqIdx; // req wins ties by rule-of-thumb; adjust as needed
     this.players[loserIdx].status = STATUS.PACKED;
     this._log(`Side show: ${req.name} vs ${target.name} — ${this.players[loserIdx].name} packs`);
-    this._advanceTurn();
-    return this.getPublicState();
+    const settled2 = this._advanceTurn();
+    return settled2 || this.getPublicState();
   }
 
   _prevActiveIndex(fromIndex) {
@@ -306,6 +306,7 @@ class TeenPattiTable {
       ultraBlindActive: this.ultraBlindActive,
       roundActive: this.roundActive,
       turnPlayerId: this.turnIndex >= 0 ? this.players[this.turnIndex]?.id : null,
+      ultraBlindEligiblePlayerId: this.ultraBlindEligibleIndex >= 0 ? this.players[this.ultraBlindEligibleIndex]?.id : null,
       canShow: this.canShow(),
       players: this.players.map((p) => ({
         id: p.id,
@@ -313,6 +314,7 @@ class TeenPattiTable {
         chips: p.chips,
         status: p.status,
         connected: p.connected,
+        isBot: !!p.isBot,
         cardCount: p.hand.length,
         hand: p.id === viewerId && p.status === STATUS.SEEN ? p.hand : undefined,
       })),

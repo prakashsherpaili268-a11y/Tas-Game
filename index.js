@@ -5,6 +5,7 @@ const { Server } = require('socket.io');
 const { nanoid } = require('nanoid');
 const { TeenPattiTable } = require('./gameEngine');
 const { CallBreakTable } = require('./callBreakEngine');
+const { runBotTurn, BOT_NAMES } = require('./botPlayer');
 
 const path = require('path');
 
@@ -35,6 +36,29 @@ function broadcastCbState(tableId) {
   }
 }
 
+// If the current player on a Teen Patti table is a bot, schedule its move
+// after a short human-like delay, then check again for the next player.
+function maybeScheduleBotTurn(tableId) {
+  const table = tables.get(tableId);
+  if (!table || !table.roundActive) return;
+  const cur = table.currentPlayer();
+  if (!cur || !cur.isBot) return;
+
+  setTimeout(() => {
+    const t = tables.get(tableId);
+    if (!t || !t.roundActive) return;
+    const player = t.currentPlayer();
+    if (!player || !player.isBot) return;
+
+    const result = runBotTurn(t, player);
+    broadcastState(tableId);
+    if (result && result.winnerId) {
+      io.to(tableId).emit('roundEnded', result);
+    }
+    maybeScheduleBotTurn(tableId);
+  }, 1100 + Math.floor(Math.random() * 900));
+}
+
 io.on('connection', (socket) => {
   let joinedTableId = null;
   let joinedCbTableId = null;
@@ -43,6 +67,20 @@ io.on('connection', (socket) => {
     const tableId = nanoid(6).toUpperCase();
     const table = new TeenPattiTable(tableId, boot);
     table.addPlayer(socket.id, name);
+    tables.set(tableId, table);
+    joinedTableId = tableId;
+    socket.join(tableId);
+    cb?.({ ok: true, tableId, state: table.getPublicState(socket.id) });
+  });
+
+  socket.on('createBotTable', ({ name, boot = 5, playerCount = 4 }, cb) => {
+    const tableId = nanoid(6).toUpperCase();
+    const table = new TeenPattiTable(tableId, boot);
+    table.addPlayer(socket.id, name);
+    const botsNeeded = Math.max(1, Math.min(5, playerCount - 1));
+    for (let i = 0; i < botsNeeded; i++) {
+      table.addPlayer(`bot_${tableId}_${i}`, BOT_NAMES[i % BOT_NAMES.length], 500, true);
+    }
     tables.set(tableId, table);
     joinedTableId = tableId;
     socket.join(tableId);
@@ -65,6 +103,7 @@ io.on('connection', (socket) => {
       table.startRound();
       cb?.({ ok: true });
       broadcastState(joinedTableId);
+      maybeScheduleBotTurn(joinedTableId);
     } catch (e) {
       cb?.({ ok: false, error: e.message });
     }
@@ -81,6 +120,7 @@ io.on('connection', (socket) => {
         if (result && result.winnerId) {
           io.to(joinedTableId).emit('roundEnded', result);
         }
+        maybeScheduleBotTurn(joinedTableId);
       } catch (e) {
         cb?.({ ok: false, error: e.message });
       }
@@ -93,6 +133,7 @@ io.on('connection', (socket) => {
       table.raiseSeen(socket.id, newStake);
       cb?.({ ok: true });
       broadcastState(joinedTableId);
+      maybeScheduleBotTurn(joinedTableId);
     } catch (e) {
       cb?.({ ok: false, error: e.message });
     }
@@ -104,6 +145,7 @@ io.on('connection', (socket) => {
       table.sideShow(socket.id, response);
       cb?.({ ok: true });
       broadcastState(joinedTableId);
+      maybeScheduleBotTurn(joinedTableId);
     } catch (e) {
       cb?.({ ok: false, error: e.message });
     }
